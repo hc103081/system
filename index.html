@@ -181,7 +181,11 @@
 
             // 更新按鈕與輸入框的禁用狀態 (Disabled)
             const inputEl = document.getElementById(`interval_input_${deviceId}`);
-            const btnUpdate = document.getElementById(`btn_update_${deviceId}`);
+
+            // 💥 關鍵優化：如果目前沒有在等待，且輸入框的數字跟真實頻率不同，就自動校正
+            if (!isWaitingInterval && parseInt(inputEl.value) !== currentInterval) {
+                inputEl.value = currentInterval;
+            } const btnUpdate = document.getElementById(`btn_update_${deviceId}`);
             const btnStop = document.getElementById(`btn_stop_${deviceId}`);
 
             inputEl.disabled = isDisabled;
