@@ -2,8 +2,14 @@ import os
 from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from werkzeug.utils import secure_filename
 from datetime import datetime
+import logging
+
 
 app = Flask(__name__)
+
+# 🌟 關鍵修正：關閉 Werkzeug 的預設刷屏 Log，只顯示 Error 與我們自己寫的 print()
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)

@@ -1,32 +1,92 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <title>📱 背景監控中控台</title>
     <style>
-        body { font-family: sans-serif; background-color: #1e1e1e; color: white; padding: 20px; }
-        .card { background: #2d2d2d; border-radius: 10px; padding: 20px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-        .title { color: #4CAF50; margin-top: 0; }
-        .info { margin: 8px 0; font-size: 16px; }
-        .offline { color: #f44336; } .online { color: #4CAF50; } .warning { color: #FFC107; }
-        button { padding: 8px 15px; margin-top: 10px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; }
-        .btn-update { background-color: #2196F3; color: white; }
-        .btn-stop { background-color: #f44336; color: white; }
-        .btn-disabled { background-color: #555; cursor: not-allowed; }
-        input[type=number] { padding: 6px; width: 60px; border-radius: 4px; border: 1px solid #ccc; }
+        body {
+            font-family: sans-serif;
+            background-color: #1e1e1e;
+            color: white;
+            padding: 20px;
+        }
+
+        .card {
+            background: #2d2d2d;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .title {
+            color: #4CAF50;
+            margin-top: 0;
+        }
+
+        .info {
+            margin: 8px 0;
+            font-size: 16px;
+        }
+
+        .offline {
+            color: #f44336;
+        }
+
+        .online {
+            color: #4CAF50;
+        }
+
+        .warning {
+            color: #FFC107;
+        }
+
+        button {
+            padding: 8px 15px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .btn-update {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        .btn-stop {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .btn-disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        input[type=number] {
+            padding: 6px;
+            width: 60px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
     </style>
 </head>
+
 <body>
     <h1>🚀 設備狀態中控台</h1>
     <div id="device-container">載入中...</div>
 
     <script>
-        // 儲存正在等待指令確認的狀態
+        // 儲存正在等待指令確認的狀態 (加入 timestamp 用於超時判斷)
         const waitingStates = {};
 
         async function fetchStatus() {
             try {
-                const response = await fetch('/api/status');
+                // 🌟 關鍵修正 1：加入 '?t=' + 時間戳，強迫瀏覽器每次都向伺服器拿最新資料，絕不使用快取
+                const response = await fetch('/api/status?t=' + new Date().getTime());
                 const data = await response.json();
                 const container = document.getElementById('device-container');
                 container.innerHTML = '';
@@ -37,9 +97,33 @@
                 }
 
                 for (const [deviceId, info] of Object.entries(data)) {
-                    // 檢查是否收到最後遺言
+                    // 防呆處理：預設為 60
+                    const currentInterval = parseInt(info.photoInterval) || 60;
+
+                    // 🌟 關鍵修正 2：強健的狀態比對與超時機制
+                    if (waitingStates[deviceId]) {
+                        const waitInfo = waitingStates[deviceId];
+                        const now = new Date().getTime();
+
+                        // 檢查是否已送達 (轉換為數字比對)
+                        if (waitInfo.expectedInterval === currentInterval) {
+                            console.log(`✅ 設備 ${deviceId} 頻率已成功更新為 ${currentInterval}s`);
+                            delete waitingStates[deviceId];
+                        }
+                        else if (waitInfo.isStopping && info.isStopping) {
+                            console.log(`✅ 設備 ${deviceId} 已確認自毀`);
+                            delete waitingStates[deviceId];
+                        }
+                        // 超時機制：如果超過 90 秒都沒反應，強制解除等待狀態
+                        else if (now - waitInfo.timestamp > 90000) {
+                            console.warn(`⚠️ 設備 ${deviceId} 指令逾時未回覆`);
+                            delete waitingStates[deviceId];
+                        }
+                    }
+
+                    // --- 以下為渲染邏輯 (與原本相同，但更穩固) ---
                     if (info.isStopping) {
-                        renderDeviceCard(container, deviceId, info, "🔴 設備已接受自毀指令並停止運作", "offline");
+                        renderDeviceCard(container, deviceId, info, currentInterval, "🔴 設備已接受自毀指令並徹底停止", "offline");
                         continue;
                     }
 
@@ -48,63 +132,70 @@
                     const statusText = isOffline ? '⚠️ 離線 (超過 3 分鐘未回應)' : '🟢 運作正常';
                     const statusColor = isOffline ? 'offline' : 'online';
 
-                    // 確認指令是否已送達 (App 回報的頻率 == 我們期望的頻率)
-                    if (waitingStates[deviceId] && waitingStates[deviceId].expectedInterval == info.photoInterval) {
-                        delete waitingStates[deviceId]; // 指令已送達，解除等待狀態
-                    }
-
-                    renderDeviceCard(container, deviceId, info, statusText, statusColor);
+                    renderDeviceCard(container, deviceId, info, currentInterval, statusText, statusColor);
                 }
             } catch (error) { console.error("無法取得狀態:", error); }
         }
 
-        function renderDeviceCard(container, deviceId, info, statusText, statusColor) {
-            const isWaiting = waitingStates[deviceId] !== undefined;
-            const intervalText = isWaiting ? `<span class="warning">⏳ 等待指令送達 (${info.photoInterval}s -> ${waitingStates[deviceId].expectedInterval}s)</span>` : `${info.photoInterval} 秒`;
-            const disabledAttr = isWaiting ? 'disabled' : '';
-            const btnClass = isWaiting ? 'btn-disabled' : 'btn-update';
+        function renderDeviceCard(container, deviceId, info, currentInterval, statusText, statusColor) {
+            const waitInfo = waitingStates[deviceId];
+            const isWaitingInterval = waitInfo && waitInfo.expectedInterval;
+            const isWaitingStop = waitInfo && waitInfo.isStopping;
+
+            if (isWaitingStop) {
+                statusText = '⏳ 等待自毀指令送達...';
+                statusColor = 'warning';
+            }
+
+            const intervalText = isWaitingInterval
+                ? `<span class="warning">⏳ 等待送達 (${currentInterval}s ➔ ${waitInfo.expectedInterval}s)</span>`
+                : `${currentInterval} 秒`;
+
+            const disabledAttr = (isWaitingInterval || isWaitingStop) ? 'disabled' : '';
+            const btnClass = disabledAttr ? 'btn-disabled' : 'btn-update';
 
             const card = `
-                <div class="card">
-                    <h2 class="title">設備: ${info.deviceName}</h2>
-                    <p class="info"><strong>狀態:</strong> <span class="${statusColor}">${statusText}</span></p>
-                    <p class="info"><strong>電量:</strong> ${info.batteryLevel}% | <strong>上傳:</strong> ${info.uploadCount} 張</p>
-                    <hr style="border-color: #444;">
-                    <p class="info"><strong>當前拍照頻率:</strong> ${intervalText}</p>
-                    
-                    <!-- 指令 1: 調整頻率 -->
-                    <input type="number" id="interval_${deviceId}" value="60" min="5" ${disabledAttr}> 秒
-                    <button class="${btnClass}" ${disabledAttr} onclick="sendCommand('${deviceId}', 'SET_INTERVAL', document.getElementById('interval_${deviceId}').value)">更新頻率</button>
-                    
-                    <!-- 指令 5: 遠端自毀 -->
-                    <button class="btn-stop" onclick="confirmStop('${deviceId}')" style="float: right;">🛑 遠端停止服務</button>
-                </div>
-            `;
+        <div class="card">
+            <h2 class="title">設備: ${info.deviceName}</h2>
+            <p class="info"><strong>狀態:</strong> <span class="${statusColor}">${statusText}</span></p>
+            <p class="info"><strong>電量:</strong> ${info.batteryLevel}% | <strong>上傳:</strong> ${info.uploadCount} 張</p>
+            <hr style="border-color: #444;">
+            <p class="info"><strong>當前拍照頻率:</strong> ${intervalText}</p>
+            
+            <input type="number" id="interval_${deviceId}" value="${currentInterval}" min="5" ${disabledAttr}> 秒
+            <button class="${btnClass}" ${disabledAttr} onclick="sendCommand('${deviceId}', 'SET_INTERVAL', document.getElementById('interval_${deviceId}').value)">更新頻率</button>
+            
+            <button class="btn-stop" ${disabledAttr} onclick="confirmStop('${deviceId}')" style="float: right;">🛑 遠端停止</button>
+        </div>
+    `;
             container.innerHTML += card;
         }
 
         async function sendCommand(deviceId, command, value) {
+            // 🌟 記錄 timestamp 供超時判定
             if (command === 'SET_INTERVAL') {
-                waitingStates[deviceId] = { expectedInterval: value };
+                waitingStates[deviceId] = { expectedInterval: parseInt(value), timestamp: new Date().getTime() };
+            } else if (command === 'STOP_SERVICE') {
+                waitingStates[deviceId] = { isStopping: true, timestamp: new Date().getTime() };
             }
-            
+
             await fetch('/api/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ deviceId, command, value })
             });
-            fetchStatus(); // 立即更新畫面顯示等待中
+            fetchStatus();
         }
 
         function confirmStop(deviceId) {
-            // 雙重確認機制
-            if (confirm("⚠️ 警告：按下確認後，App 將傳送最後狀態並徹底停止背景服務。\n您確定要自毀嗎？")) {
+            if (confirm("⚠️ 確定要發送終極自毀指令嗎？App 將徹底停止並關閉。")) {
                 sendCommand(deviceId, 'STOP_SERVICE', '');
             }
         }
 
         fetchStatus();
-        setInterval(fetchStatus, 3000); // 每 3 秒拉取一次，讓 UI 反應更靈敏
+        setInterval(fetchStatus, 3000);
     </script>
 </body>
+
 </html>
