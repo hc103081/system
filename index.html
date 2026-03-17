@@ -80,48 +80,40 @@
     <div id="device-container">載入中...</div>
 
     <script>
-        // 儲存正在等待指令確認的狀態 (加入 timestamp 用於超時判斷)
+        // 儲存正在等待指令確認的狀態
         const waitingStates = {};
 
         async function fetchStatus() {
             try {
-                // 🌟 關鍵修正 1：加入 '?t=' + 時間戳，強迫瀏覽器每次都向伺服器拿最新資料，絕不使用快取
                 const response = await fetch('/api/status?t=' + new Date().getTime());
                 const data = await response.json();
                 const container = document.getElementById('device-container');
-                container.innerHTML = '';
 
                 if (Object.keys(data).length === 0) {
                     container.innerHTML = '<p>尚未有設備連線...</p>';
                     return;
+                } else if (container.innerHTML.includes('尚未有設備連線')) {
+                    container.innerHTML = ''; // 清除空提示
                 }
 
                 for (const [deviceId, info] of Object.entries(data)) {
-                    // 防呆處理：預設為 60
                     const currentInterval = parseInt(info.photoInterval) || 60;
 
-                    // 🌟 關鍵修正 2：強健的狀態比對與超時機制
+                    // 檢查等待狀態
                     if (waitingStates[deviceId]) {
                         const waitInfo = waitingStates[deviceId];
                         const now = new Date().getTime();
 
-                        // 檢查是否已送達 (轉換為數字比對)
                         if (waitInfo.expectedInterval === currentInterval) {
-                            console.log(`✅ 設備 ${deviceId} 頻率已成功更新為 ${currentInterval}s`);
                             delete waitingStates[deviceId];
-                        }
-                        else if (waitInfo.isStopping && info.isStopping) {
-                            console.log(`✅ 設備 ${deviceId} 已確認自毀`);
+                        } else if (waitInfo.isStopping && info.isStopping) {
                             delete waitingStates[deviceId];
-                        }
-                        // 超時機制：如果超過 90 秒都沒反應，強制解除等待狀態
-                        else if (now - waitInfo.timestamp > 90000) {
-                            console.warn(`⚠️ 設備 ${deviceId} 指令逾時未回覆`);
+                        } else if (now - waitInfo.timestamp > 90000) {
                             delete waitingStates[deviceId];
                         }
                     }
 
-                    // --- 以下為渲染邏輯 (與原本相同，但更穩固) ---
+                    // 處理自毀狀態
                     if (info.isStopping) {
                         renderDeviceCard(container, deviceId, info, currentInterval, "🔴 設備已接受自毀指令並徹底停止", "offline");
                         continue;
@@ -138,6 +130,31 @@
         }
 
         function renderDeviceCard(container, deviceId, info, currentInterval, statusText, statusColor) {
+            let card = document.getElementById(`card_${deviceId}`);
+
+            // 💥 關鍵修正 1：卡片與輸入框「只建立一次」，絕不重複渲染干擾打字
+            if (!card) {
+                card = document.createElement('div');
+                card.id = `card_${deviceId}`;
+                card.className = 'card';
+                card.innerHTML = `
+            <h2 class="title">設備: ${info.deviceName}</h2>
+            <p class="info"><strong>狀態:</strong> <span id="status_${deviceId}"></span></p>
+            <p class="info"><strong>電量:</strong> <span id="battery_${deviceId}"></span>% | <strong>上傳:</strong> <span id="upload_${deviceId}"></span> 張</p>
+            <hr style="border-color: #444;">
+            <p class="info"><strong>當前拍照頻率:</strong> <span id="interval_text_${deviceId}"></span></p>
+            
+            <input type="number" id="interval_input_${deviceId}" min="5"> 秒
+            <button id="btn_update_${deviceId}" onclick="sendIntervalCmd('${deviceId}')">更新頻率</button>
+            
+            <button id="btn_stop_${deviceId}" class="btn-stop" onclick="confirmStop('${deviceId}')" style="float: right;">🛑 遠端停止</button>
+        `;
+                container.appendChild(card);
+                // 只在第一次連線時，給予輸入框預設值
+                document.getElementById(`interval_input_${deviceId}`).value = currentInterval;
+            }
+
+            // 準備要更新的文字與狀態
             const waitInfo = waitingStates[deviceId];
             const isWaitingInterval = waitInfo && waitInfo.expectedInterval;
             const isWaitingStop = waitInfo && waitInfo.isStopping;
@@ -151,28 +168,36 @@
                 ? `<span class="warning">⏳ 等待送達 (${currentInterval}s ➔ ${waitInfo.expectedInterval}s)</span>`
                 : `${currentInterval} 秒`;
 
-            const disabledAttr = (isWaitingInterval || isWaitingStop) ? 'disabled' : '';
-            const btnClass = disabledAttr ? 'btn-disabled' : 'btn-update';
+            const isDisabled = isWaitingInterval || isWaitingStop;
 
-            const card = `
-        <div class="card">
-            <h2 class="title">設備: ${info.deviceName}</h2>
-            <p class="info"><strong>狀態:</strong> <span class="${statusColor}">${statusText}</span></p>
-            <p class="info"><strong>電量:</strong> ${info.batteryLevel}% | <strong>上傳:</strong> ${info.uploadCount} 張</p>
-            <hr style="border-color: #444;">
-            <p class="info"><strong>當前拍照頻率:</strong> ${intervalText}</p>
-            
-            <input type="number" id="interval_${deviceId}" value="${currentInterval}" min="5" ${disabledAttr}> 秒
-            <button class="${btnClass}" ${disabledAttr} onclick="sendCommand('${deviceId}', 'SET_INTERVAL', document.getElementById('interval_${deviceId}').value)">更新頻率</button>
-            
-            <button class="btn-stop" ${disabledAttr} onclick="confirmStop('${deviceId}')" style="float: right;">🛑 遠端停止</button>
-        </div>
-    `;
-            container.innerHTML += card;
+            // 💥 關鍵修正 2：精準更新文字節點，不動到 Input 框
+            const statusEl = document.getElementById(`status_${deviceId}`);
+            statusEl.innerHTML = statusText;
+            statusEl.className = statusColor;
+
+            document.getElementById(`battery_${deviceId}`).innerText = info.batteryLevel;
+            document.getElementById(`upload_${deviceId}`).innerText = info.uploadCount;
+            document.getElementById(`interval_text_${deviceId}`).innerHTML = intervalText;
+
+            // 更新按鈕與輸入框的禁用狀態 (Disabled)
+            const inputEl = document.getElementById(`interval_input_${deviceId}`);
+            const btnUpdate = document.getElementById(`btn_update_${deviceId}`);
+            const btnStop = document.getElementById(`btn_stop_${deviceId}`);
+
+            inputEl.disabled = isDisabled;
+            btnUpdate.disabled = isDisabled;
+            btnStop.disabled = isDisabled;
+
+            btnUpdate.className = isDisabled ? 'btn-disabled' : 'btn-update';
+        }
+
+        // 輔助函數：取得輸入框數值並發送指令
+        function sendIntervalCmd(deviceId) {
+            const val = document.getElementById(`interval_input_${deviceId}`).value;
+            sendCommand(deviceId, 'SET_INTERVAL', val);
         }
 
         async function sendCommand(deviceId, command, value) {
-            // 🌟 記錄 timestamp 供超時判定
             if (command === 'SET_INTERVAL') {
                 waitingStates[deviceId] = { expectedInterval: parseInt(value), timestamp: new Date().getTime() };
             } else if (command === 'STOP_SERVICE') {

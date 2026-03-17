@@ -49,19 +49,24 @@ def upload_image():
 @app.route('/status', methods=['POST'])
 def update_status():
     data = request.json
-    if not data or 'deviceId' not in data: return jsonify({"error": "無效的狀態資料"}), 400
+    if not data or 'deviceId' not in data: return jsonify({"error": "無效"}), 400
     
     device_id = data['deviceId']
     data['lastUpdate'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     device_statuses[device_id] = data
     
-    # 檢查是否有待發送的指令
+    # 🌟 修正 3：在 CMD 印出 App 回傳的狀態 (包含自毀遺言)
+    if data.get('isStopping'):
+        print(f"💀 [接收遺言] 設備 {device_id} 已確認停止服務！")
+    else:
+        print(f"💓 [收到心跳] 設備: {device_id} | 頻率: {data.get('photoInterval')}s | 上傳: {data.get('uploadCount')}張")
+
     response_data = {"message": "狀態已更新"}
     if device_id in pending_commands:
-        cmd = pending_commands.pop(device_id) # 取出並清除指令
+        cmd = pending_commands.pop(device_id)
         response_data['command'] = cmd['command']
         response_data['value'] = cmd['value']
-        print(f"📤 成功下發指令 [{cmd['command']}] 給設備 {device_id}")
+        print(f"📤[指令下發成功] [{cmd['command']}] 已送達給設備 {device_id}")
         
     return jsonify(response_data), 200
 
@@ -75,9 +80,12 @@ def send_command():
     
     if not device_id or not command: return jsonify({"error": "參數錯誤"}), 400
     
-    # 將指令放入暫存區，等待下一次心跳包領取
     pending_commands[device_id] = {"command": command, "value": value}
-    return jsonify({"message": "指令已排隊等待下發"}), 200
+    
+    # 🌟 修正 1：網頁下達指令時，立刻顯示在 CMD
+    print(f"💻[Web下達指令] 準備要求設備 {device_id} 執行: {command} (參數: {value})")
+    
+    return jsonify({"message": "指令已排隊"}), 200
 
 @app.route('/api/status', methods=['GET'])
 def get_statuses():
