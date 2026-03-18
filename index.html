@@ -99,25 +99,35 @@
                 for (const [deviceId, info] of Object.entries(data)) {
                     const currentInterval = parseInt(info.photoInterval) || 60;
 
+                    // 處理等待中的指令送達確認
                     if (waitingStates[deviceId]) {
                         const waitInfo = waitingStates[deviceId];
                         const now = new Date().getTime();
 
-                        // 檢查是否送達
                         if (waitInfo.expectedInterval === currentInterval) {
                             delete waitingStates[deviceId];
                         } else if (waitInfo.isStopping && info.isStopping) {
                             delete waitingStates[deviceId];
+                        } else if (waitInfo.isRestarting && info.isRestarting) {
+                            // 🌟 收到 App 的重啟遺言，解除本地等待狀態
+                            delete waitingStates[deviceId];
                         } else if (now - waitInfo.timestamp > 90000) {
-                            delete waitingStates[deviceId]; // 超時 90 秒放棄
+                            delete waitingStates[deviceId]; // 超時放棄
                         }
                     }
 
+                    // 🌟 攔截已經停止或正在重啟的設備
                     if (info.isStopping) {
                         renderDeviceCard(container, deviceId, info, currentInterval, "🔴 設備服務已安全中斷與關閉", "offline");
                         continue;
                     }
+                    if (info.isRestarting) {
+                        // 🌟 當 App 傳回 isRestarting = true 時，顯示重啟中
+                        renderDeviceCard(container, deviceId, info, currentInterval, "🔄 設備正在重新啟動中 (約需 3-5 秒)...", "warning");
+                        continue;
+                    }
 
+                    // 正常運作狀態判斷
                     const lastUpdateTime = new Date(info.lastUpdate).getTime();
                     const isOffline = (new Date().getTime() - lastUpdateTime) > (3 * 60 * 1000);
                     const statusText = isOffline ? '⚠️ 離線 (超過 3 分鐘未回應)' : '🟢 運作正常';
@@ -131,7 +141,6 @@
         function renderDeviceCard(container, deviceId, info, currentInterval, statusText, statusColor) {
             let card = document.getElementById(`card_${deviceId}`);
 
-            // 💥 卡片與輸入框「只建立一次」，永遠不自動覆蓋使用者的輸入！
             if (!card) {
                 card = document.createElement('div');
                 card.id = `card_${deviceId}`;
@@ -139,25 +148,34 @@
                 card.innerHTML = `
             <h2 class="title">設備: ${info.deviceName}</h2>
             <p class="info"><strong>狀態:</strong> <span id="status_${deviceId}"></span></p>
+            <p class="info" style="font-size: 13px; color: #aaa;">🕒 最後更新: <span id="last_update_${deviceId}"></span></p>
             <p class="info"><strong>電量:</strong> <span id="battery_${deviceId}"></span>% | <strong>上傳:</strong> <span id="upload_${deviceId}"></span> 張</p>
             <hr style="border-color: #444;">
-            <p class="info"><strong>當前運作頻率:</strong> <span id="interval_text_${deviceId}"></span></p>
+            <p class="info"><strong>當前拍照頻率:</strong> <span id="interval_text_${deviceId}"></span></p>
             
             <input type="number" id="interval_input_${deviceId}" min="5" placeholder="輸入秒數"> 秒
             <button id="btn_update_${deviceId}" onclick="sendIntervalCmd('${deviceId}')">更新頻率</button>
             
+            <!-- 🌟 加入遠端重啟按鈕 -->
+            <button id="btn_restart_${deviceId}" class="btn-update" onclick="confirmRestart('${deviceId}')" style="background-color: #FF9800; float: right; margin-left: 10px;">🔄 遠端重啟</button>
             <button id="btn_stop_${deviceId}" class="btn-stop" onclick="confirmStop('${deviceId}')" style="float: right;">🛑 遠端停止</button>
         `;
                 container.appendChild(card);
                 document.getElementById(`interval_input_${deviceId}`).value = currentInterval;
             }
 
+            // 取得等待狀態
             const waitInfo = waitingStates[deviceId];
             const isWaitingInterval = waitInfo && waitInfo.expectedInterval;
             const isWaitingStop = waitInfo && waitInfo.isStopping;
+            const isWaitingRestart = waitInfo && waitInfo.isRestarting; // 🌟 檢查是否在等重啟
 
+            // 根據等待狀態覆寫 UI 文字
             if (isWaitingStop) {
                 statusText = '⏳ 等待自毀指令送達...';
+                statusColor = 'warning';
+            } else if (isWaitingRestart) {
+                statusText = '⏳ 等待重啟指令送達...';
                 statusColor = 'warning';
             }
 
@@ -165,27 +183,41 @@
                 ? `<span class="warning">⏳ 變更中 (${currentInterval}s ➔ ${waitInfo.expectedInterval}s)...</span>`
                 : `${currentInterval} 秒`;
 
-            const isDisabled = isWaitingInterval || isWaitingStop;
+            // 💥 終極防呆：只要是在「等待指令」、「正在停止」、「正在重啟」，全部強制鎖定按鈕！
+            const isDisabled = isWaitingInterval || isWaitingStop || isWaitingRestart || info.isStopping || info.isRestarting;
 
+            // 更新 DOM 文字
+            document.getElementById(`last_update_${deviceId}`).innerText = info.lastUpdate;
             document.getElementById(`status_${deviceId}`).innerHTML = statusText;
             document.getElementById(`status_${deviceId}`).className = statusColor;
             document.getElementById(`battery_${deviceId}`).innerText = info.batteryLevel;
             document.getElementById(`upload_${deviceId}`).innerText = info.uploadCount;
             document.getElementById(`interval_text_${deviceId}`).innerHTML = intervalText;
 
-            // 僅控制按鈕的禁用狀態
+            // 鎖定/解鎖所有控制元件
             const inputEl = document.getElementById(`interval_input_${deviceId}`);
             const btnUpdate = document.getElementById(`btn_update_${deviceId}`);
             const btnStop = document.getElementById(`btn_stop_${deviceId}`);
+            const btnRestart = document.getElementById(`btn_restart_${deviceId}`); // 🌟 取得重啟按鈕
+
+            // 防止打字時被刷新覆蓋
+            if (!isWaitingInterval && parseInt(inputEl.value) !== currentInterval && document.activeElement !== inputEl) {
+                inputEl.value = currentInterval;
+            }
 
             inputEl.disabled = isDisabled;
             btnUpdate.disabled = isDisabled;
             btnStop.disabled = isDisabled;
+            btnRestart.disabled = isDisabled; // 🌟 鎖定重啟按鈕
+
+            // 變更按鈕顏色以視覺化鎖定狀態
             btnUpdate.className = isDisabled ? 'btn-disabled' : 'btn-update';
+            btnStop.className = isDisabled ? 'btn-disabled' : 'btn-stop';
+            btnRestart.style.backgroundColor = isDisabled ? '#555' : '#FF9800'; // 變灰
+            btnRestart.style.cursor = isDisabled ? 'not-allowed' : 'pointer';
         }
 
         function sendIntervalCmd(deviceId) {
-            // 💥 防呆：確保使用者輸入的不是空值
             const val = parseInt(document.getElementById(`interval_input_${deviceId}`).value);
             if (isNaN(val) || val < 5) {
                 alert("請輸入有效的秒數 (至少 5 秒)");
@@ -194,27 +226,35 @@
             sendCommand(deviceId, 'SET_INTERVAL', val);
         }
 
+        // 🌟 新增重啟確認函式
+        function confirmRestart(deviceId) {
+            if (confirm("⚠️ 確定要重啟 App 嗎？服務將會中斷，並在 3 秒後自動恢復。")) {
+                sendCommand(deviceId, 'RESTART_APP', '');
+            }
+        }
+
         function confirmStop(deviceId) {
-            // 彈出確認對話框，防止誤觸
-            if (confirm(`您確定要永久停止此設備的服務嗎？\n\n這個動作無法復原。`)) {
-                sendCommand(deviceId, 'STOP_SERVICE', 'true');
+            if (confirm("⚠️ 確定要發送終極自毀指令嗎？App 將徹底停止並關閉。")) {
+                sendCommand(deviceId, 'STOP_SERVICE', '');
             }
         }
 
         async function sendCommand(deviceId, command, value) {
+            // 記錄發出的指令狀態
             if (command === 'SET_INTERVAL') {
                 waitingStates[deviceId] = { expectedInterval: parseInt(value), timestamp: new Date().getTime() };
             } else if (command === 'STOP_SERVICE') {
                 waitingStates[deviceId] = { isStopping: true, timestamp: new Date().getTime() };
+            } else if (command === 'RESTART_APP') {
+                waitingStates[deviceId] = { isRestarting: true, timestamp: new Date().getTime() }; // 🌟 記錄重啟等待
             }
 
             await fetch('/api/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // 💥 關鍵修正：確保 value 永遠以 String 格式傳給 Python 與 Android
                 body: JSON.stringify({ deviceId, command, value: value.toString() })
             });
-            fetchStatus();
+            fetchStatus(); // 立即刷新 UI 顯示鎖定
         }
 
         fetchStatus();
