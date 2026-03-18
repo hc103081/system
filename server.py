@@ -55,18 +55,35 @@ def update_status():
     data['lastUpdate'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     device_statuses[device_id] = data
     
-    # 🌟 修正 3：在 CMD 印出 App 回傳的狀態 (包含自毀遺言)
-    if data.get('isStopping'):
+    # 取得手機目前真實的狀態
+    current_interval = str(data.get('photoInterval', ''))
+    is_stopping = data.get('isStopping', False)
+    
+    if is_stopping:
         print(f"💀 [接收遺言] 設備 {device_id} 已確認停止服務！")
     else:
-        print(f"💓 [收到心跳] 設備: {device_id} | 頻率: {data.get('photoInterval')}s | 上傳: {data.get('uploadCount')}張")
+        print(f"💓 [收到心跳] 設備: {device_id} | 頻率: {current_interval}s | 上傳: {data.get('uploadCount')}張")
 
+    if device_id in pending_commands:
+        cmd = pending_commands[device_id]
+        
+        # 情況 A：如果要求改頻率，且手機回報的頻率真的變了 -> 刪除指令
+        if cmd['command'] == 'SET_INTERVAL' and current_interval == str(cmd['value']):
+            print(f"✅ [指令確認] 設備 {device_id} 已成功套用頻率 {current_interval}s")
+            del pending_commands[device_id]
+            
+        # 情況 B：如果要求自毀，且手機回傳遺言了 -> 刪除指令
+        elif cmd['command'] == 'STOP_SERVICE' and is_stopping:
+            print(f"✅[指令確認] 設備 {device_id} 已徹底自毀")
+            del pending_commands[device_id]
+
+    # 💥 關鍵修正 2：如果指令還沒被刪除，代表手機還沒改，繼續下發！(死纏爛打機制)
     response_data = {"message": "狀態已更新"}
     if device_id in pending_commands:
-        cmd = pending_commands.pop(device_id)
+        cmd = pending_commands[device_id]
         response_data['command'] = cmd['command']
         response_data['value'] = cmd['value']
-        print(f"📤[指令下發成功] [{cmd['command']}] 已送達給設備 {device_id}")
+        print(f"📤 [指令下發] 持續發送 [{cmd['command']}] 給設備 {device_id}...")
         
     return jsonify(response_data), 200
 

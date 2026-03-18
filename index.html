@@ -194,6 +194,13 @@
             sendCommand(deviceId, 'SET_INTERVAL', val);
         }
 
+        function confirmStop(deviceId) {
+            // 彈出確認對話框，防止誤觸
+            if (confirm(`您確定要永久停止此設備的服務嗎？\n\n這個動作無法復原。`)) {
+                sendCommand(deviceId, 'STOP_SERVICE', 'true');
+            }
+        }
+
         async function sendCommand(deviceId, command, value) {
             if (command === 'SET_INTERVAL') {
                 waitingStates[deviceId] = { expectedInterval: parseInt(value), timestamp: new Date().getTime() };
